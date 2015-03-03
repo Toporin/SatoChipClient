@@ -31,8 +31,6 @@ import com.google.bitcoin.core.TransactionOutput;
 import com.google.bitcoin.core.UnsafeByteArrayOutputStream;
 import com.google.bitcoin.core.Utils;
 import static com.google.bitcoin.core.Utils.BITCOIN_SIGNED_MESSAGE_HEADER_BYTES;
-//import static com.google.bitcoin.core.Utils.NEGATIVE_ONE;
-//import static com.google.bitcoin.core.Utils.singleDigest;
 import static com.google.bitcoin.core.Utils.uint32ToByteStreamLE;
 import com.google.bitcoin.core.VarInt;
 import com.google.bitcoin.crypto.DeterministicKey;
@@ -40,13 +38,11 @@ import com.google.bitcoin.crypto.HDKeyDerivation;
 import com.google.bitcoin.crypto.TransactionSignature;
 import com.google.bitcoin.params.RegTestParams;
 import com.google.bitcoin.script.Script;
-//import com.google.bitcoin.script.ScriptBuilder;
 import com.google.bitcoin.script.ScriptOpCodes;
-//import com.google.bitcoin.utils.BriefLogFormatter;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-//import static java.lang.System.exit;
+import static java.lang.System.exit;
 import java.math.BigInteger;
 import java.security.NoSuchAlgorithmException;
 import java.security.SignatureException;
@@ -56,23 +52,24 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.smartcardio.CardException;
 import javax.xml.bind.DatatypeConverter;
-import org.spongycastle.asn1.ASN1InputStream; // used to convert hexstring to byte[]
+import static org.junit.Assert.assertArrayEquals; // used to convert hexstring to byte[]
+import org.spongycastle.asn1.ASN1InputStream;
 import org.spongycastle.asn1.ASN1Integer;
 import org.spongycastle.asn1.DLSequence;
 import org.spongycastle.crypto.digests.SHA256Digest;
-//import org.spongycastle.crypto.digests.SHA512Digest;
-//import org.spongycastle.crypto.macs.HMac;
-//import org.spongycastle.crypto.params.KeyParameter;
 import org.spongycastle.util.encoders.Base64;
+
 
 public class SatoChipClient {
 
-	/* constants declaration */
+    
+    /* constants declaration */
         
     // authentikey
     public static byte[] authentikey;
     public static DeterministicKey masterkey;
-	
+    public static final byte[] DEFAULT_KEY_ACL={0x00,0x00, 0x00,0x00, 0x00,0x00};
+    
 	
     /**
     * Utility function that converts a byte array into an hexadecimal string.
@@ -233,8 +230,12 @@ public class SatoChipClient {
         String stralg="";
         if (alg_type==JCconstants.ALG_RSA)
             stralg="RSA";
-        else if (alg_type==JCconstants.ALG_EC_FP)
+        else if (alg_type==JCconstants.ALG_RSA_CRT)
+            stralg="RSA-CRT";
+        else if (alg_type==JCconstants.ALG_EC_FP){
             stralg="ECC";
+            gen_opt= JCconstants.OPT_EC_SECP256k1;
+        }
         else{
             System.out.println("ERROR: algorithm not supported!");
             return;
@@ -252,26 +253,119 @@ public class SatoChipClient {
         System.out.println("*****************\n\n");
     }
 
-    public static void TestImportKey(CardConnector cc, byte key_type, byte key_nbr, short key_size, byte[] key_data) throws CardConnectorException{
+    public static void TestGenerateSymmetricKey(CardConnector cc, byte algtype, byte keynbr, short keysize) throws CardConnectorException{
+        
+        byte[] keyACL=DEFAULT_KEY_ACL;
+            
+        String stralg="";
+        if (algtype==JCconstants.TYPE_DES)
+            stralg="DES";
+        else if (algtype==JCconstants.TYPE_AES)
+            stralg="AES";
+        else{
+            System.out.println("ERROR: algorithm not supported!");
+            return;
+        } 
+
+        System.out.println("Test GenerateKey(alg="+stralg + ", keynbr="+ (int)keynbr+", keysize="+ keysize+")"); 
+        cc.cardGenerateSymmetricKey(keynbr, algtype, keysize, keyACL);
+
+        // list key
+        cc.cardGetStatus();
+        System.out.println("*****ListKey*****");
+        cc.cardListKeys();
+        System.out.println("*****************\n\n");
+    }
+
+    public static void TestImportKey(CardConnector cc, byte key_type, byte key_nbr, short key_size) throws CardConnectorException{
 
             byte key_encoding= 0x00; //plain
             byte[] key_ACL= {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
             String stralg="";
-            if (key_type==JCconstants.TYPE_EC_FP_PRIVATE)
+            String strkey="";
+            short keysize= key_size;
+            if (key_type==JCconstants.TYPE_EC_FP_PRIVATE){
                 stralg="ECpriv";
-            else if (key_type==JCconstants.TYPE_EC_FP_PUBLIC)
+                keysize=256;
+                strkey="0020"+"7bb8bfeb2ebc1401f9a14585032df07126ddf634ca641b7fa223b44b1e861548";//pycoin ku P:toporin
+            }
+            else if (key_type==JCconstants.TYPE_EC_FP_PUBLIC){
                 stralg="ECpub";
-            else if (key_type==JCconstants.TYPE_RSA_PUBLIC)
+                keysize=256;
+                strkey="0041" //short blob size (0x41=65)
+                        +"04" //uncompressed 
+                        +"8d68936ac800d3fc1cf999bfe0a3af4ead4cf9ad61d3cb377c3e5626b5bfa9e8" // coordx
+                        +"d682abeb1337c9b97d114f757bdd81e0207ad673d736eb6b4a84890be5f92335";// coordy
+            }
+            else if (key_type==JCconstants.TYPE_RSA_PUBLIC){
                 stralg="RSApub";
-            else if (key_type==JCconstants.TYPE_RSA_PRIVATE)
+                keysize=512;
+                strkey="0040"// 0x40=64 modsize (byte) 
+                        +"88d8b1c3ac39311ac82af63d6aeb3ea9cd05a28975cbc30203be81339f1341dac60e8afda1130e25e83e64e3112b9fb43c2e1ee47b8f6e164204c526bd7621e5" //mod
+                        +"0003" // expsize
+                        +"010001"; // exponent
+            }
+            else if (key_type==JCconstants.TYPE_RSA_PRIVATE){
                 stralg="RSApriv";
+                keysize=512;
+                strkey="0040"// 0x40=64 modsize (byte) 
+                        +"88d8b1c3ac39311ac82af63d6aeb3ea9cd05a28975cbc30203be81339f1341dac60e8afda1130e25e83e64e3112b9fb43c2e1ee47b8f6e164204c526bd7621e5" //mod
+                        +"0040" // expsize
+                        +"60da7d762ffe8a729a194e0e4a0e155bb86fb489f585318fcb76999b1f8b519fa41e55ba3c6294b5eaf1dc333191299ea10f5ca8507c3f120111396686554641";
+            }
+            else if (key_type==JCconstants.TYPE_RSA_CRT_PRIVATE){
+                stralg="RSA-CRTpriv";
+                keysize=512;
+                strkey="0020"
+                        +"f07c528f200b28b8e8ff4d73079730179bcec63b61a3012b849434ee4de389af"//P
+                        +"0020"
+                        +"91acbf0d2dc68b213b6dad87cddc580901f646401eee8c1946d395d44c45f6ab"//Q
+                        +"0020"
+                        +"264034c60f9b06db8721d655eacb8708ae68533f310b31cc879c16227857abdb"//Qinv
+                        +"0020"
+                        +"b6350bfc8343d133e0dd66da0bdb4245f0f846fbc0eb573c98b40e32ac7304e3"//DP1
+                        +"0020"
+                        +"1907511bf68d7242176fd4accc95db1a5117fb21f12e932b949badd677f45d59";//DQ1
+            }
+            else if (key_type==JCconstants.TYPE_AES && key_size==128){
+                stralg="AES-128";
+                keysize=128;
+                strkey="0010"+"000102030405060708090a0b0c0d0e0f";//0x10=16
+            }
+            else if (key_type==JCconstants.TYPE_AES && key_size==192){
+                stralg="AES-192";
+                keysize=192;
+                strkey="0018"+"000102030405060708090a0b0c0d0e0f0001020304050607";//0x18=24
+            }
+            else if (key_type==JCconstants.TYPE_AES && key_size==256){
+                stralg="AES-256";
+                keysize=256;
+                strkey="0020"+"000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f";//0x20=32
+            }
+            else if (key_type==JCconstants.TYPE_DES && key_size==64){
+                stralg="DES-64";
+                keysize=64;
+                strkey="0008"+"0001020304050607";//0x08=8
+            }
+            else if (key_type==JCconstants.TYPE_DES && key_size==128){
+                stralg="DES-128";
+                keysize=128;
+                strkey="0010"+"000102030405060708090a0b0c0d0e0f";//0x10=16
+            }
+            else if (key_type==JCconstants.TYPE_DES && key_size==192){
+                stralg="DES-192";
+                keysize=192;
+                strkey="0018"+"000102030405060708090a0b0c0d0e0f0001020304050607";//0x18=24
+            }
             else{
                 System.out.println("ERROR: key type not supported!");
                 return;
             }
+            
+            byte[] keyblob= DatatypeConverter.parseHexBinary(strkey); 
 
-            System.out.println("Test ImportKey(key="+stralg+", nb="+ (int)key_nbr+", keysize="+ key_size+")"); // jcop-ko);
-            cc.cardImportKey(key_nbr, key_ACL, key_encoding, key_type, key_size, key_data); 
+            System.out.println("TestImportKey(key="+stralg+", nb="+ (int)key_nbr+", keysize="+ keysize+")"); // jcop-ko);
+            cc.cardImportKey(key_nbr, key_ACL, key_encoding, key_type, keysize, keyblob); 
 
             // list key
             cc.cardGetStatus();
@@ -321,6 +415,49 @@ public class SatoChipClient {
 
     }
 
+    public static void TestComputeCrypt(CardConnector cc, byte CM, byte keynbr, byte keynbrdecrypt) throws CardConnectorException{
+        
+        String stralg="";
+        if (CM==JCconstants.ALG_RSA_PKCS1)
+            stralg="RSApkcs1";
+        else if (CM==JCconstants.ALG_RSA_NOPAD)
+            stralg="RSAnopad";
+        else if (CM==JCconstants.ALG_AES_BLOCK_128_CBC_NOPAD)
+            stralg="AES-128-CBC";
+        else if (CM==JCconstants.ALG_AES_BLOCK_128_ECB_NOPAD)
+            stralg="AES-128-ECB";
+        else if (CM==JCconstants.ALG_DES_CBC_NOPAD)
+            stralg="DES-128-CBC";
+        else if (CM==JCconstants.ALG_DES_ECB_NOPAD)
+            stralg="DES-128-ECB";
+        else{
+            System.out.println("ERROR: mode not supported!");
+            return;
+        }
+            
+        String strmsg="abcdef";
+        byte[] msg;
+        byte[] msgcrypt;
+        byte[] msgdecrypt;
+        for (int i=0; i<6; i++){
+            msg= strmsg.getBytes();
+            //System.out.println("msg:"+toString(msg));
+            
+            System.out.println("TestComputeCrypt(CM="+stralg+", keynb="+keynbr+")");
+            msgcrypt= cc.cardComputeCrypt(keynbr, CM, JCconstants.MODE_ENCRYPT, msg);
+            //System.out.println("msgcrypt:"+toString(msgcrypt));
+            
+            System.out.println("TestComputeDecrypt(CM="+stralg+", keynb="+keynbrdecrypt+")");
+            msgdecrypt= cc.cardComputeCrypt(keynbrdecrypt, CM, JCconstants.MODE_DECRYPT, msgcrypt);
+            //System.out.println("msgdecrypt:"+toString(msgdecrypt));
+            
+            assertArrayEquals(msg,msgdecrypt);
+            
+            strmsg+=strmsg;
+        }
+        
+    }
+
     public static void TestSHA512(CardConnector cc) throws CardConnectorException{
 
         System.out.println("Test SHA512");
@@ -330,7 +467,7 @@ public class SatoChipClient {
         byte[] response= cc.cardComputeSha512(msg1);
         System.out.println("hash expected:"+ hash1);
         System.out.println("hash computed:"+ toString(response));
-        //
+        
         byte[] msg2= {'a','b','c'};
         String hash2= "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f";
         response= cc.cardComputeSha512(msg2);
@@ -485,7 +622,43 @@ public class SatoChipClient {
         return pkey.getPubKey();
 
     }
+    
+    public static byte[] TestGetPublicKeyFromPrivate(CardConnector cc, byte keynbr) throws CardConnectorException{
 
+        System.out.println("TestGetPublicKeyFromPrivate - keynbr:"+keynbr);
+        byte[] response= cc.cardGetPublicKeyFromPrivate(keynbr);
+        
+        int coordx_size = ((int)(response[0] & 0xff)<<8) + ((int)(response[1] & 0xff));
+        byte[] msg= new byte[2+coordx_size]; 
+        System.arraycopy(response, 0, msg, 0, coordx_size+2);
+        byte[] coordx= new byte[coordx_size]; 
+        System.arraycopy(response, 2, coordx, 0, coordx_size);
+        int sig_size = ((int)(response[2+coordx_size] & 0xff)<<8) + ((int)(response[2+coordx_size+1] & 0xff));  
+        byte[] signature= new byte[sig_size]; 
+        System.arraycopy(response, coordx_size+4, signature, 0, sig_size);
+        ECKey.ECDSASignature ecdsasig= toECDSASignature(signature);
+        Sha256Hash msghash= Sha256Hash.create(msg); // compute sha256 of message
+        int recid=-1;
+        ECKey pkey=null;
+        for (int i=0; i<4; i++){
+            pkey= ECKey.recoverFromSignature(i, ecdsasig, msghash, true);
+            if (pkey!=null){
+                byte[] coordxkey= new byte[coordx_size];
+                System.arraycopy(pkey.getPubKey(), 1, coordxkey, 0, coordx_size);
+                if (Arrays.equals(coordx,coordxkey)){
+                    recid=i;
+                    System.out.println("#recid: "+i+" PubKey:" + toString(pkey.getPubKey()));
+                    break;
+                }
+            }
+        }
+        if (recid == -1)
+            throw new CardConnectorException("Unable to recover public key from signature");        
+
+        return pkey.getPubKey();
+
+    }
+    
     public static byte[] TestBip32GetExtendedKey(byte[] bip32path){
 
         // create SW extendedkey with bitcoinj
@@ -557,7 +730,7 @@ public class SatoChipClient {
             pubkey=TestBip32GetExtendedKey(bip32path);
         }
         else{
-            pubkey=cc.cardGetPublicKeyFromPrivate(keynbr);
+            pubkey=TestGetPublicKeyFromPrivate(cc, keynbr);
         }
         
         // sign message
@@ -610,7 +783,7 @@ public class SatoChipClient {
             pubkey=TestBip32GetExtendedKey(bip32path);
         }
         else{
-            pubkey=cc.cardGetPublicKeyFromPrivate(keynbr);
+            pubkey=TestGetPublicKeyFromPrivate(cc, keynbr);
         }
         
         // bitcoinj
@@ -809,22 +982,6 @@ public class SatoChipClient {
             //byte[] byteAID= {0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x00}; //cardedge jcdk-222
             //byte[] byteAID= {(byte)0xFF ,0x42 ,0x54 ,0x43 ,0x48 ,0x49 ,0x50}; //BTChip
             
-//            //String strresponse="00209A42486E1D26728F36A527D7E801A1AF81B7B4E07AEAA3B12FB76B40C78750F600473045022040FD266EA3792D900588D3905A766C62531B782A5B3AB714E28474FBFDA5C2C9022100B54931B1985C4E19C01703A0E319AF9A74E68D0A95D4CCAC999906458AE1B8B200483046022100FE0C49F28FAD0FF2BDBCD846D0B38DA15AB670BD96759E5FA36B261AE0E7EAE3022100AC97AD5ECCA4F60D18B4A9AB4C8836593AEA7EFAA0458BF1E0586D46E8F618FA";
-//            //String strresponse="00209A42486E1D26728F36A527D7E801A1AF81B7B4E07AEAA3B12FB76B40C78750F600483046022100B372DBC1875609BA36D7160EF8228DA22C0197D78CE5CF3D635DB1C5BB0AAA170221008ED5F6204218926CC520DC412D705870FC67CE2B39881B9CFC10F68C0E0F1EE200483046022100A6616634415516B2AE65FB0DDE11E574106E1B8A58697D2997C525DA004DCA1E0221008C0418DB248723ACCE2D26099FF351092622C2528B72D8C729AF15C815F7265B";
-//            //String strresponse="0020E53A6BC69086F5059A007A9DD38FDF19E7748245C6820755239E21CE6D2D418400473045022100F792CF25106F218D9F83E75D5DB2F06BCE3A3AFC3C7EF4BF853A7B1BCC48A3A0022026E334965957669EAEBD6F6AF28B9BE667625A4F0F5DE573C714EF550305C3A900483046022100BB2BE7477C8BABAF660A3AAD14C6561D0F8F967C48620AD39923946037589EFC0221009A65163AB180BA5A8D6C173E0BDAB78E32C6BC34AA63F7FB8F6B7FE594821641";
-//            //TestRecoverPubkey(strresponse);
-//
-//            //String strmsg="18426974636F696E205369676E6564204D6573736167653A0A05617A657274";
-//            //String strsig="3045022100EBB669A2006F6493A8C0A71758577F5645757D0BCDBD998684A8086C033EBBDD022046B984FA3D40A7F2FD99EF75F83C760232DDC3366701512CA7E02618B2274F4A";
-//
-//            String strsig="30450220682877BBB84A454ACAC5C82FA6C61625A359096920DD5661F2F2DC36CAB1A49E022100F7E96ADC389D1C3524A6F6DB8F272DA39AE0459B18CDEBF79343739B989AE75B";
-//            String strmsg="18426974636F696E205369676E6564204D6573736167653A0A05617A657274";
-//            byte[] msg= DatatypeConverter.parseHexBinary(strmsg);
-//            byte[] sig= DatatypeConverter.parseHexBinary(strsig);
-//            //debugRecoverFromSig(msg, sig);
-//            //exit(0);
-
-
             // CardConnector object
             CardConnector cc= new CardConnector();
 
@@ -833,7 +990,6 @@ public class SatoChipClient {
             System.out.println("cardselect");
             cc.cardSelect(byteAID);
 
-            //exit(0);
             //get status
             try{
                 cc.cardGetStatus();
@@ -866,7 +1022,6 @@ public class SatoChipClient {
             }
             //get status
             cc.cardGetStatus();
-
             //exit(0);
 
             // verifPIN
@@ -877,36 +1032,58 @@ public class SatoChipClient {
             System.out.println("*****ListKey*****");
             cc.cardListKeys();
             System.out.println("*****************");
-
+            
             // gen key
-            //TestGenerateKeyPair(byte alg_type, byte priv_key_nbr, byte pub_key_nbr, short key_size);
-            //TestGenerateKeyPair(cc, JCconstants.ALG_RSA, (byte)0x00, (byte)0x01, (short)1024);
-            //TestGenerateKeyPair(ALG_EC_FP, (byte)0x02, (byte)0x03, (short)256);
-            //TestGenerateKeyPair(cc, JCconstants.ALG_EC_FP, (byte)0x04, (byte)0x05, (short)192);
-
+            //TestGenerateKeyPair(cc, JCconstants.ALG_RSA_CRT, (byte)0x00, (byte)0x01, (short)512);// doesn't work?
+            TestGenerateKeyPair(cc, JCconstants.ALG_RSA, (byte)0x02, (byte)0x03, (short)512);
+            //TestGenerateKeyPair(cc, JCconstants.ALG_RSA, (byte)0x04, (byte)0x05, (short)1024);
+            TestGenerateKeyPair(cc, JCconstants.ALG_EC_FP, (byte)0x06, (byte)0xff, (short)256);
+            TestGetPublicKeyFromPrivate(cc, (byte)0x06);
+            TestGenerateSymmetricKey(cc, JCconstants.TYPE_DES, (byte)0x0A, (short)64);
+            TestGenerateSymmetricKey(cc, JCconstants.TYPE_DES, (byte)0x0B, (short)128);
+            TestGenerateSymmetricKey(cc, JCconstants.TYPE_DES, (byte)0x0C, (short)192);
+            TestGenerateSymmetricKey(cc, JCconstants.TYPE_AES, (byte)0x0D, (short)128);
+            TestGenerateSymmetricKey(cc, JCconstants.TYPE_AES, (byte)0x0E, (short)192);
+            TestGenerateSymmetricKey(cc, JCconstants.TYPE_AES, (byte)0x0F, (short)256);
+            //exit(0);
+            
+            // test computeCrypt
+            //TestComputeCrypt(cc, JCconstants.ALG_RSA_PKCS1, (byte)0x01, (byte)0x00); // 
+            //TestComputeCrypt(cc, JCconstants.ALG_RSA_NOPAD, (byte)0x01, (byte)0x00); // to do: padding
+            TestComputeCrypt(cc, JCconstants.ALG_DES_CBC_NOPAD, (byte)0x0A, (byte)0x0A);
+            TestComputeCrypt(cc, JCconstants.ALG_DES_ECB_NOPAD, (byte)0x0B, (byte)0x0B);
+            TestComputeCrypt(cc, JCconstants.ALG_DES_CBC_NOPAD, (byte)0x0C, (byte)0x0C);
+            TestComputeCrypt(cc, JCconstants.ALG_AES_BLOCK_128_CBC_NOPAD, (byte)0x0D, (byte)0x0D);
+            TestComputeCrypt(cc, JCconstants.ALG_AES_BLOCK_128_ECB_NOPAD, (byte)0x0E, (byte)0x0E);
+            TestComputeCrypt(cc, JCconstants.ALG_AES_BLOCK_128_CBC_NOPAD, (byte)0x0F, (byte)0x0F);
+            //exit(0);
+            
             // import private key 
-            //TestImportKey(byte key_type, byte key_nbr, short key_size, byte[] key_data);
-            byte[] key_priv={0x00, (byte)32, // short blob_size
-                (byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,
-                (byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,
-                (byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,
-                (byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x00,(byte)0x01}; // (short) sizeS + (byte[]) S
-            //04\79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8
-            byte[] key_pub={(byte)0x00, (byte)65, // (short) sizeW
-                (byte)0x04, // uncompressed
-                (byte)0x79,(byte)0xbe,(byte)0x66,(byte)0x7e,(byte)0xf9,(byte)0xdc,(byte)0xbb,(byte)0xac,(byte)0x55,(byte)0xa0,(byte)0x62,(byte)0x95,(byte)0xce,(byte)0x87,(byte)0x0b,(byte)0x07,
-                (byte)0x02,(byte)0x9b,(byte)0xfc,(byte)0xdb,(byte)0x2d,(byte)0xce,(byte)0x28,(byte)0xd9,(byte)0x59,(byte)0xf2,(byte)0x81,(byte)0x5b,(byte)0x16,(byte)0xf8,(byte)0x17,(byte)0x98,
-                (byte)0x48,(byte)0x3a,(byte)0xda,(byte)0x77,(byte)0x26,(byte)0xa3,(byte)0xc4,(byte)0x65,(byte)0x5d,(byte)0xa4,(byte)0xfb,(byte)0xfc,(byte)0x0e,(byte)0x11,(byte)0x08,(byte)0xa8,
-                (byte)0xfd,(byte)0x17,(byte)0xb4,(byte)0x48,(byte)0xa6,(byte)0x85,(byte)0x54,(byte)0x19,(byte)0x9c,(byte)0x47,(byte)0xd0,(byte)0x8f,(byte)0xfb,(byte)0x10,(byte)0xd4,(byte)0xb8}; 
-//                byte[] key_pub={(byte)0x00, (byte)33, // (short) sizeW
-//                                  (byte)0x02, // compressed
-//                                  (byte)0x79,(byte)0xbe,(byte)0x66,(byte)0x7e,(byte)0xf9,(byte)0xdc,(byte)0xbb,(byte)0xac,
-//                                  (byte)0x55,(byte)0xa0,(byte)0x62,(byte)0x95,(byte)0xce,(byte)0x87,(byte)0x0b,(byte)0x07,
-//                                  (byte)0x02,(byte)0x9b,(byte)0xfc,(byte)0xdb,(byte)0x2d,(byte)0xce,(byte)0x28,(byte)0xd9,
-//                                  (byte)0x59,(byte)0xf2,(byte)0x81,(byte)0x5b,(byte)0x16,(byte)0xf8,(byte)0x17,(byte)0x98}; 
-            //TestImportKey(cc, JCconstants.TYPE_EC_FP_PRIVATE, (byte)0x06, (short) 256, key_priv);
-            //TestImportKey(cc, JCconstants.TYPE_EC_FP_PUBLIC, (byte) 0x07, (short) 256, key_pub);
+            TestImportKey(cc, JCconstants.TYPE_RSA_CRT_PRIVATE, (byte)0x00, (short)512);
+            TestImportKey(cc, JCconstants.TYPE_RSA_PUBLIC, (byte)0x01, (short)512);
+            TestImportKey(cc, JCconstants.TYPE_RSA_PRIVATE, (byte)0x02, (short)512);
+            TestImportKey(cc, JCconstants.TYPE_RSA_PUBLIC, (byte)0x03, (short)512);
+            TestImportKey(cc, JCconstants.TYPE_EC_FP_PRIVATE, (byte)0x06, (short)256);
+            TestGetPublicKeyFromPrivate(cc, (byte)0x06);
+            //TestImportKey(cc, JCconstants.TYPE_EC_FP_PUBLIC, (byte)0x07, (short)256); // doesn't work?
+            TestImportKey(cc, JCconstants.TYPE_DES, (byte)0x0A, (short)64);
+            TestImportKey(cc, JCconstants.TYPE_DES, (byte)0x0B, (short)128);
+            TestImportKey(cc, JCconstants.TYPE_DES, (byte)0x0C, (short)192);
+            TestImportKey(cc, JCconstants.TYPE_AES, (byte)0x0D, (short)128);
+            TestImportKey(cc, JCconstants.TYPE_AES, (byte)0x0E, (short)192);
+            TestImportKey(cc, JCconstants.TYPE_AES, (byte)0x0F, (short)256);
 
+            //TestComputeCrypt(cc, JCconstants.ALG_RSA_PKCS1, (byte)0x01, (byte)0x02); //doesn't work? 
+            //TestComputeCrypt(cc, JCconstants.ALG_RSA_PKCS1, (byte)0x01, (byte)0x00); //doesn't work?
+            //TestComputeCrypt(cc, JCconstants.ALG_RSA_NOPAD, (byte)0x01, (byte)0x00); // to do: padding
+            TestComputeCrypt(cc, JCconstants.ALG_DES_CBC_NOPAD, (byte)0x0A, (byte)0x0A);
+            TestComputeCrypt(cc, JCconstants.ALG_DES_ECB_NOPAD, (byte)0x0B, (byte)0x0B);
+            TestComputeCrypt(cc, JCconstants.ALG_DES_CBC_NOPAD, (byte)0x0C, (byte)0x0C);
+            TestComputeCrypt(cc, JCconstants.ALG_AES_BLOCK_128_CBC_NOPAD, (byte)0x0D, (byte)0x0D);
+            TestComputeCrypt(cc, JCconstants.ALG_AES_BLOCK_128_ECB_NOPAD, (byte)0x0E, (byte)0x0E);
+            TestComputeCrypt(cc, JCconstants.ALG_AES_BLOCK_128_CBC_NOPAD, (byte)0x0F, (byte)0x0F);
+            //exit(0)
+            
             // computesign
             //TestComputeSign(byte CM, byte key_sign, byte key_verif);
             //TestComputeSign(JCconstants.ALG_RSA_PKCS1, (byte) 0, (byte) 1);
