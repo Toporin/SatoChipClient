@@ -39,8 +39,16 @@ public class CardConnectorException extends Exception{
      */
     public CardConnectorException(String msg, CommandAPDU c, ResponseAPDU r) {
         super(msg);
-        this.c= c;
-        this.r= r;
+        //only for debug purpose as it may contains sensitive data! 
+        //this.c= c;
+        //this.r= r;
+        
+        // safer to remove sensitive information
+        this.c= new CommandAPDU(c.getCLA(), c.getINS(), c.getP1(), c.getP2(), null);
+        byte[] sw12=new byte[2];
+        sw12[0]=(byte)r.getSW1();
+        sw12[1]=(byte)r.getSW2();
+        this.r= new ResponseAPDU(sw12);
     }
 
     CardConnectorException(String unable_to_recover_public_key_from_signatu) {

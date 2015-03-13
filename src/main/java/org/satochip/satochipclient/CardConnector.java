@@ -20,8 +20,10 @@
 
 package org.satochip.satochipclient;
 
+import java.io.ByteArrayOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -695,9 +697,38 @@ public class CardConnector {
         response = exchangeAPDU(cla, ins, p1, p2, data, le);
         System.out.println("APDU <<<: "	+ toString(response));
         return response;
-
     }
 
+    public byte[] cardGenerateSymmetricKey( 
+                    byte keynbr, byte alg_type, short key_size, byte[] key_ACL) throws CardConnectorException{
+
+        // to do: check ACL sizes ==6
+        // to do: check bounds on key nbr
+        // to do: check key size
+        byte cla= JCconstants.CardEdge_CLA;
+        byte ins= JCconstants.INS_GEN_KEYSYM;
+        byte p1= keynbr; 
+        byte p2= 0x00;
+        byte[] data= new byte[1+2+6]; 
+        byte le= 0x00;
+        short base=0;
+        //key gen data
+        data[base++]=alg_type;
+        data[base++]=(byte)(key_size>>8);//most significant byte
+        data[base++]=(byte)(key_size & 0x00FF);//least significant byte
+        for (int i=0; i<JCconstants.KEY_ACL_SIZE; i++){
+                data[base++]=key_ACL[i]; 
+        }
+        
+        // send apdu
+        System.out.println("cardGenSymmetricKey");
+        System.out.println("APDU >>>: "	+ toString(data));
+        byte[] response;
+        response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        System.out.println("APDU <<<: "	+ toString(response));
+        return response;
+    }
+    
     public byte[] cardComputeSign(byte key_nbr, byte CM, byte CD, byte[] buffer, byte[] signature) throws CardConnectorException{
 
         // return either signature as byte array, or bool value as byte array
@@ -810,6 +841,158 @@ public class CardConnector {
         }
 
         return response;
+    }	
+
+    public byte[] cardComputeCrypt(byte key_nbr, byte CM, byte CD, byte[] buffer) throws CardConnectorException{
+        
+        // buffer may contain IV nonce (in case of decryption operation in CBC mode for DES/AES)
+        // output data may contain IV nonce (in case of encryption operation in CBC mode for DES/AES)
+        // buffer will be padded in case of encryption mode for DES/AES
+        // output will be unpadded in case of decryption mode for DES/AES
+        int blocksize= 0;
+        byte algtype=0;
+        if (CM==JCconstants.ALG_DES_CBC_NOPAD || 
+                CM==JCconstants.ALG_DES_ECB_NOPAD){
+            blocksize=8;
+            algtype= JCconstants.TYPE_DES;
+        }
+        else if (CM==JCconstants.ALG_AES_BLOCK_128_CBC_NOPAD ||
+                CM==JCconstants.ALG_AES_BLOCK_128_ECB_NOPAD){
+            blocksize=16;
+            algtype= JCconstants.TYPE_AES;
+        }
+        
+        // padding
+        if (CD==JCconstants.MODE_ENCRYPT && 
+                (algtype==JCconstants.TYPE_DES || 
+                algtype==JCconstants.TYPE_AES)){
+            int paddedlength= (buffer.length/blocksize)*blocksize+blocksize;
+            int paddinglength= paddedlength-buffer.length;
+            byte[] paddedbuffer= new byte[paddedlength];
+            Arrays.fill(paddedbuffer, (byte)paddinglength);
+            System.arraycopy(buffer, 0, paddedbuffer, 0, buffer.length);
+//            System.out.println("PADDING:");
+//            System.out.println("length:"+buffer.length);
+//            System.out.println("paddedlength:"+paddedlength);
+//            System.out.println("paddinglength:"+paddinglength);
+//            System.out.println("paddedbuffer:"+toString(paddedbuffer));
+            buffer=paddedbuffer;
+        }
+        
+        // data is cut into chunks, each processed in a different APDU call
+        int chunk= 128; // max APDU data=256 = chunk>=255-(1+2+2)-signature size
+        int bufferOffset=0;
+        int bufferLeft=buffer.length;
+        
+        // CIPHER_INIT - no data processed
+        byte cla= JCconstants.CardEdge_CLA;
+        byte ins= JCconstants.INS_COMPUTE_CRYPT;
+        byte p1= key_nbr;
+        byte p2= JCconstants.OP_INIT;
+        byte le= 0x00;
+        byte[] data;
+        int dataOffset=0;
+        int IVlength=0;
+        if (CD==JCconstants.MODE_DECRYPT){
+            if (CM==JCconstants.ALG_DES_CBC_NOPAD)
+                IVlength=8;
+            else if (CM==JCconstants.ALG_AES_BLOCK_128_CBC_NOPAD)
+                IVlength=16;
+        }
+        data= new byte[3+2+IVlength]; 
+        data[dataOffset++]=(byte) CM; // cipher mode: elliptic curve or RSA: to check?
+        data[dataOffset++]=(byte) CD; // cipher direction: sign or verify
+        data[dataOffset++]=(byte) JCconstants.DL_APDU; // data location: in apdu	
+        data[dataOffset++]=(byte) 0;
+        data[dataOffset++]=(byte) IVlength;
+        System.arraycopy(buffer, 0, data, dataOffset, IVlength);
+        dataOffset+=IVlength;
+        bufferOffset+=IVlength;
+        bufferLeft-=IVlength;
+
+        // send apdu
+        System.out.println("cardComputeCrypt - INIT");
+        System.out.println("APDU >>>: "	+ toString(data));
+        byte[] response;
+        response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        System.out.println("APDU <<<: "	+ toString(response));
+        // recover IV from card (for CD=ENCRYPT && CM=CBC)
+        ByteArrayOutputStream bos= new ByteArrayOutputStream(buffer.length+IVlength);
+        bos.write(response,0,response.length);
+        System.out.println("IV: "+ toString(response));
+        
+        // CIPHER PROCESS/UPDATE (optionnal)
+        while(bufferLeft>chunk){
+                //cla= JCconstants.CardEdge_CLA;
+                //ins= INS_COMPUTE_CRYPT;
+                //p1= key_nbr;
+                p2= JCconstants.OP_PROCESS;
+                data= new byte[1+2+chunk]; 
+                dataOffset=0;
+                data[dataOffset++]=(byte) JCconstants.DL_APDU; // data location: in apdu	
+                data[dataOffset++]=(byte) (chunk>>8); //msb
+                data[dataOffset++]=(byte) (chunk&0xFF); //lsb
+                System.arraycopy(buffer, bufferOffset, data, dataOffset, chunk);
+                dataOffset+=chunk;
+                bufferOffset+=chunk;
+                bufferLeft-=chunk;
+
+                // send apdu
+                System.out.println("cardComputeCrypt - PROCESS");
+                System.out.println("APDU data >>>: " + toString(data));
+                System.out.println("APDU datasize >>>: " + data.length);
+                response= exchangeAPDU(cla, ins, p1, p2, data, le);
+                System.out.println("APDU <<<: "	+ toString(response));
+                
+                // update output
+                bos.write(response,2,response.length-2);                               
+        }		
+
+        // CIPHER FINAL (last chunk)
+        chunk= bufferLeft; //following while condition, buffer_left<=chunk
+        System.out.println("chunk value= "	+ chunk);
+        //cla= JCconstants.CardEdge_CLA;
+        //ins= INS_COMPUTE_CRYPT;
+        //p1= key_nbr;
+        p2= JCconstants.OP_FINALIZE;
+        data= new byte[1+2+chunk]; 
+        dataOffset=0;
+        data[dataOffset++]=(byte) JCconstants.DL_APDU; // data location: in apdu	
+        data[dataOffset++]=(byte) (chunk>>8); //msb
+        data[dataOffset++]=(byte) (chunk&0xFF); //lsb
+        System.arraycopy(buffer, bufferOffset, data, dataOffset, chunk);
+        dataOffset+=chunk;
+        bufferOffset+=chunk;
+        bufferLeft-=chunk;
+
+        // send apdu
+        System.out.println("cardComputeCrypt - FINALIZE");
+        System.out.println("APDU >>>: "	+ toString(data));
+        response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        System.out.println("APDU <<<: "	+ toString(response));
+        
+        // update output
+        bos.write(response,2,response.length-2);                               
+        byte[] output;
+        
+        // unpadding
+        if (CD==JCconstants.MODE_DECRYPT && 
+                (algtype==JCconstants.TYPE_DES || 
+                algtype==JCconstants.TYPE_AES)){
+            byte[] paddedoutput= bos.toByteArray();
+            int paddinglength= paddedoutput[paddedoutput.length-1];
+            output= new byte[paddedoutput.length-paddinglength];
+            System.arraycopy(paddedoutput, 0, output, 0, output.length);
+//            System.out.println("UNPADDING");
+//            System.out.println("paddedlength:"+paddedoutput.length);
+//            System.out.println("paddinglength:"+paddinglength);
+//            System.out.println("paddedoutput:"+toString(paddedoutput));
+        }
+        else{
+            output= bos.toByteArray();
+        }
+        
+        return output;
     }	
 
     public byte[] cardComputeSha512(byte[] msg) throws CardConnectorException{
@@ -1053,7 +1236,251 @@ public class CardConnector {
 
         return response;
     }
+    
+    /**
+    * This function creates an object that will be identified by the provided object ID.
+    * The object’s space and name will be allocated until deleted using MSCDeleteObject.
+    * The object will be allocated upon the card's memory heap. 
+    * Object creation is only allowed if the object ID is available and logged in
+    * identity(-ies) have sufficient privileges to create objects.
+    *  
+    * ins: 0x5A
+    * p1: 0x00
+    * p2: 0x00
+    * data: [object_id(4b) | object_size(4b) | object_ACL(6b)] 
+    * 		where ACL is Read-Write-Delete
+    * return: none
+    */
+    public byte[] cardCreateObject(int objId, int objSize, byte[] objACL) throws CardConnectorException{
 
+        byte cla= JCconstants.CardEdge_CLA;
+        byte ins= JCconstants.INS_CREATE_OBJ;
+        byte p1= 0x00;
+        byte p2= 0x00;
+        byte[] data= new byte[14];
+        byte le= 0x00; 
+        
+        int offset=0;
+        data[offset++]= (byte)((objId>>>24) & 0xff);
+        data[offset++]= (byte)((objId>>>16) & 0xff);
+        data[offset++]= (byte)((objId>>>8) & 0xff);
+        data[offset++]= (byte)((objId) & 0xff);
+        data[offset++]= (byte)((objSize>>>24) & 0xff);
+        data[offset++]= (byte)((objSize>>>16) & 0xff);
+        data[offset++]= (byte)((objSize>>>8) & 0xff);
+        data[offset++]= (byte)((objSize) & 0xff);
+        System.arraycopy(objACL, 0, data, 8, JCconstants.KEY_ACL_SIZE);
+        
+        // send apdu
+        System.out.println("cardCreateObject");
+        System.out.println("APDU >>>: ");
+        byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        System.out.println("APDU <<<: "	+ toString(response));   
+        
+        return response;
+    }
+    
+    /**
+    * This function deletes the object identified by the provided object ID. The object’s
+    * space and name will be removed from the heap and made available for other objects.
+    * The zero flag denotes whether the object’s memory should be zeroed after
+    * deletion. This kind of deletion is recommended if object was storing sensitive data.
+    *   
+    * ins: 0x52
+    * p1: 0x00
+    * p2: 0x00 or 0x01 for secure erasure 
+    * data: [object_id(4b)] 
+    * return: none
+    */
+    public byte[] cardDeleteObject(int objId, byte secureErasure) throws CardConnectorException{
+
+        byte cla= JCconstants.CardEdge_CLA;
+        byte ins= JCconstants.INS_DELETE_OBJ;
+        byte p1= 0x00;
+        byte p2= secureErasure;
+        byte[] data= new byte[4];
+        byte le= 0x00; 
+        
+        int offset=0;
+        data[offset++]= (byte)((objId>>>24) & 0xff);
+        data[offset++]= (byte)((objId>>>16) & 0xff);
+        data[offset++]= (byte)((objId>>>8) & 0xff);
+        data[offset++]= (byte)((objId) & 0xff);
+        
+        // send apdu
+        System.out.println("cardDeleteObject");
+        System.out.println("APDU >>>: ");
+        byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        System.out.println("APDU <<<: "	+ toString(response));   
+        
+        return response;
+    }
+    
+    /**
+    * This function (over-)writes data to an object that has been previously created with
+    * CreateObject. Provided Object Data is stored starting from the byte specified
+    * by the Offset parameter. The size of provided object data must be exactly (Data
+    * Length – 8) bytes. Provided offset value plus the size of provided Object Data
+    * must not exceed object size. 
+    * Up to 246 bytes can be transferred with a single APDU. If more bytes need to be
+    * transferred, then multiple WriteObject commands must be used with different offsets.
+    * 
+    * ins: 0x54
+    * p1: 0x00
+    * p2: 0x00 
+    * data: [object_id(4b) | object_offset(4b) | data_size(1b) | data] 
+    * return: none
+    */
+    public byte[] cardWriteObject(int objId, byte[] objData) throws CardConnectorException{
+
+        int objOffset=0;
+        int objRemaining= objData.length;
+        int chunkSize;
+        byte[] response=null;
+        
+        while(objRemaining>0){
+            chunkSize=(objRemaining>160)?160:objRemaining;
+            response=cardWriteObject(objId, objData, objOffset, chunkSize);
+            objOffset+=chunkSize;
+            objRemaining-=chunkSize;
+        }
+        
+        return response;
+    }
+
+    public byte[] cardWriteObject(int objId, byte[] objData, int objOffset, int objLength) throws CardConnectorException{
+
+        byte cla= JCconstants.CardEdge_CLA;
+        byte ins= JCconstants.INS_WRITE_OBJ;
+        byte p1= 0x00;
+        byte p2= 0x00;
+        byte[] data= new byte[4+4+1+objLength];
+        byte le= 0x00; 
+        
+        int offset=0;
+        data[offset++]= (byte)((objId>>>24) & 0xff);
+        data[offset++]= (byte)((objId>>>16) & 0xff);
+        data[offset++]= (byte)((objId>>>8) & 0xff);
+        data[offset++]= (byte)((objId) & 0xff);
+        data[offset++]= (byte)((objOffset>>>24) & 0xff);
+        data[offset++]= (byte)((objOffset>>>16) & 0xff);
+        data[offset++]= (byte)((objOffset>>>8) & 0xff);
+        data[offset++]= (byte)((objOffset) & 0xff);
+        data[offset++]= (byte) objLength;
+        System.arraycopy(objData, objOffset, data, offset, objLength);
+        
+        // send apdu
+        System.out.println("cardWriteObject-offset:"+objOffset);
+        System.out.println("APDU >>>: ");
+        byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        System.out.println("APDU <<<: "	+ toString(response));   
+        
+        return response;
+    }
+    
+    /**
+    * This function reads data from an object that has been previously created with 
+    * MSCCreateObject. Object data is read starting from the byte specified by the
+    * Offset parameter. Up to 255 bytes can be transferred with a single APDU. 
+    * If more bytes need to be transferred, then multiple ReadObject commands must 
+    * be used with different offsets. 
+    * Object data will be effectively read only if logged in identity(ies) have 
+    * sufficient privileges for the operation, according to the object’s ACL.
+    *   
+    * ins: 0x56
+    * p1: 0x00
+    * p2: 0x00 
+    * data: [object_id(4b) | object_offset(4b) | chunk_length(1b)] 
+    * return: [object_data(chunk_length)]
+    */
+    public byte[] cardReadObject(int objId) throws CardConnectorException{
+
+        int objOffset=0;
+        int objRemaining= cardGetObjectSize(objId);
+        int chunkSize;
+        byte[] response=new byte[objRemaining];
+        byte[] responseChunk;
+        
+        while(objRemaining>0){
+            chunkSize=(objRemaining>160)?160:objRemaining;
+            responseChunk=cardReadObject(objId, objOffset, chunkSize);
+            if (responseChunk.length!=chunkSize){
+                throw new CardConnectorException("CardException when reading object "+objId
+                        +" at offset "+objOffset
+                        +" chunksize expected "+chunkSize
+                        +" chunksize receveid "+responseChunk.length , null, null); 
+            }
+            System.arraycopy(responseChunk, 0, response, objOffset, chunkSize);
+            objOffset+=chunkSize;
+            objRemaining-=chunkSize;
+        }
+        
+        return response;
+    }    
+    public byte[] cardReadObject(int objId, int objOffset, int objLength) throws CardConnectorException{
+
+        byte cla= JCconstants.CardEdge_CLA;
+        byte ins= JCconstants.INS_READ_OBJ;
+        byte p1= 0x00;
+        byte p2= 0x00;
+        byte[] data= new byte[4+4+1];
+        byte le= 0x00; 
+        
+        int offset=0;
+        data[offset++]= (byte)((objId>>>24) & 0xff);
+        data[offset++]= (byte)((objId>>>16) & 0xff);
+        data[offset++]= (byte)((objId>>>8) & 0xff);
+        data[offset++]= (byte)((objId) & 0xff);
+        data[offset++]= (byte)((objOffset>>>24) & 0xff);
+        data[offset++]= (byte)((objOffset>>>16) & 0xff);
+        data[offset++]= (byte)((objOffset>>>8) & 0xff);
+        data[offset++]= (byte)((objOffset) & 0xff);
+        data[offset++]= (byte) objLength;
+        
+        // send apdu
+        System.out.println("cardReadObject-offset:"+objOffset);
+        System.out.println("APDU >>>: ");
+        byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        System.out.println("APDU <<<: "	+ toString(response));   
+        
+        return response;
+    }
+    
+    /**
+    * This function returns the size of an object that has been previously created with 
+    * MSCCreateObject.  
+    *   
+    * ins: 0x57
+    * p1: 0x00
+    * p2: 0x00 
+    * data: [object_id(4b)] 
+    * return: [object_size(2b)]
+    */
+    public short cardGetObjectSize(int objId) throws CardConnectorException{
+
+        byte cla= JCconstants.CardEdge_CLA;
+        byte ins= JCconstants.INS_SIZE_OBJ;
+        byte p1= 0x00;
+        byte p2= 0x00;
+        byte[] data= new byte[4];
+        byte le= 0x02; 
+        
+        int offset=0;
+        data[offset++]= (byte)((objId>>>24) & 0xff);
+        data[offset++]= (byte)((objId>>>16) & 0xff);
+        data[offset++]= (byte)((objId>>>8) & 0xff);
+        data[offset++]= (byte)((objId) & 0xff);
+        
+        // send apdu
+        System.out.println("cardGetObjectSize:");
+        System.out.println("APDU >>>: ");
+        byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        System.out.println("APDU <<<: "	+ toString(response));   
+        short objSize= (short) (((response[0]&0xff)<<8)+(response[1]&0xff));
+                
+        return objSize;
+    }
+    
     public byte[] cardGetStatus() throws CardConnectorException{
 
         byte cla= JCconstants.CardEdge_CLA;
@@ -1079,13 +1506,13 @@ public class CardConnector {
             byte CE_version_min= response[base++];
             byte soft_version_maj= response[base++];
             byte soft_version_min= response[base++];
-            int sec_mem_tot= (response[base++]<<8)+response[base++];
-            int mem_tot= (response[base++]<<8)+response[base++];
-            int sec_mem_free= (response[base++]<<8)+response[base++];
-            int mem_free= (response[base++]<<8)+response[base++];
+            int sec_mem_tot= ((response[base++]&0xff)<<8)+(response[base++]&0xff);
+            int mem_tot= ((response[base++]&0xff)<<8)+(response[base++]&0xff);
+            int sec_mem_free= ((response[base++]&0xff)<<8)+(response[base++]&0xff);
+            int mem_free= ((response[base++]&0xff)<<8)+(response[base++]&0xff);
             byte PINs_nbr= response[base++];
             byte keys_nbr= response[base++];
-            short logged_in= (short) ((response[base++]<<8)+response[base++]);
+            short logged_in= (short) (((response[base++]&0xff)<<8)+(response[base++]&0xff));
             System.out.println("	datasize(15?) <<<: " + datasize );
             System.out.println("	card Edge major version: "+CE_version_maj);
             System.out.println("	card Edge minor version: "+CE_version_min);

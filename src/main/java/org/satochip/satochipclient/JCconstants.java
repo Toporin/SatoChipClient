@@ -22,10 +22,6 @@ package org.satochip.satochipclient;
 
 import java.security.KeyPair;
 
-/**
- *
- * @author Baudoin
- */
 public class JCconstants {
     
     	// Maximum number of keys handled by the Cardlet
@@ -75,7 +71,8 @@ public class JCconstants {
 
 	// Keys' use and management
 	public final static byte INS_GEN_KEYPAIR = (byte) 0x30;
-	public final static byte INS_IMPORT_KEY = (byte) 0x32;
+        public final static byte INS_GEN_KEYSYM = (byte) 0x31;
+        public final static byte INS_IMPORT_KEY = (byte) 0x32;
 	public final static byte INS_EXPORT_KEY = (byte) 0x34;
         public final static byte INS_GET_PUBLIC_FROM_PRIVATE= (byte)0x35;
 	public final static byte INS_COMPUTE_CRYPT = (byte) 0x36;
@@ -95,6 +92,7 @@ public class JCconstants {
 	public final static byte INS_DELETE_OBJ = (byte) 0x52;
 	public final static byte INS_READ_OBJ = (byte) 0x56;
 	public final static byte INS_WRITE_OBJ = (byte) 0x54;
+        public final static byte INS_SIZE_OBJ = (byte) 0x57;
 
 	// Status information
 	public final static byte INS_LIST_OBJECTS = (byte) 0x58;
@@ -175,10 +173,11 @@ public class JCconstants {
 	public final static byte TYPE_RSA_PUBLIC = 4; //KeyBuilder.TYPE_RSA_PUBLIC; 
 	public final static byte TYPE_RSA_PRIVATE = 5; //KeyBuilder.TYPE_RSA_PRIVATE; 
 	public final static byte TYPE_RSA_CRT_PRIVATE = 6; //KeyBuilder.TYPE_RSA_CRT_PRIVATE; 
-	public final static byte TYPE_DES = 3; //KeyBuilder.TYPE_DES; 
 	public final static byte TYPE_EC_FP_PUBLIC = 11; //KeyBuilder.TYPE_EC_FP_PUBLIC;
 	public final static byte TYPE_EC_FP_PRIVATE = 12; //KeyBuilder.TYPE_EC_FP_PRIVATE;
-
+        public final static byte TYPE_DES = 3; //KeyBuilder.TYPE_DES; 
+	public final static byte TYPE_AES=15; //KeyBuilder.TYPE_AES;
+        
 	// KeyBlob Encoding in Key Blobs
 	public final static byte BLOB_ENC_PLAIN = (byte) 0x00;
 
@@ -198,9 +197,12 @@ public class JCconstants {
 	public final static byte ALG_RSA_PKCS1 = 10; //Cipher.ALG_RSA_PKCS1; //(byte) 0x01;
 	public final static byte ALG_DES_CBC_NOPAD = 1; //Cipher.ALG_DES_CBC_NOPAD; //(byte) 0x20;
 	public final static byte ALG_DES_ECB_NOPAD = 5; //Cipher.ALG_DES_ECB_NOPAD; //(byte) 0x21;
+        public final static byte ALG_AES_BLOCK_128_CBC_NOPAD = 13; //Cipher.ALG_AES_BLOCK_128_CBC_NOPAD; 
+        public final static byte ALG_AES_BLOCK_128_ECB_NOPAD = 14; //Cipher.ALG_AES_BLOCK_128_ECB_NOPAD; 
         public final static byte ALG_ECDSA_SHA = 17; //Signature.ALG_ECDSA_SHA;//(byte) 0x30;
 	public final static byte ALG_ECDSA_SHA_256 = 33; //Bitcoin (Signature.ALG_ECDSA_SHA256==33) https://javacard.kenai.com/javadocs/classic/javacard/security/Signature.html#ALG_ECDSA_SHA_256 
-	public final static byte DL_APDU = (byte) 0x01;
+	
+        public final static byte DL_APDU = (byte) 0x01;
 	public final static byte DL_OBJECT = (byte) 0x02;
 	public final static byte LIST_OPT_RESET = (byte) 0x00;
 	public final static byte LIST_OPT_NEXT = (byte) 0x01;

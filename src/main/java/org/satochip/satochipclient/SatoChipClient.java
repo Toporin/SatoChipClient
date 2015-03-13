@@ -68,7 +68,7 @@ public class SatoChipClient {
     // authentikey
     public static byte[] authentikey;
     public static DeterministicKey masterkey;
-    public static final byte[] DEFAULT_KEY_ACL={0x00,0x00, 0x00,0x00, 0x00,0x00};
+    public static final byte[] DEFAULT_ACL={0x00,0x01, 0x00,0x01, 0x00,0x01};
     
 	
     /**
@@ -221,10 +221,41 @@ public class SatoChipClient {
         return hash.getBytes();   
     }
 
+    public static void TestObject(CardConnector cc) throws CardConnectorException{
+        byte[] objACL= DEFAULT_ACL;//{0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        int objId=123456;
+        
+        System.out.println("TestObject:");
+        for (int size=1; size<65536; size=size*2){
+            System.out.println("\t size:"+size);
+            byte[] objData= new byte[size];
+            Arrays.fill(objData, (byte)0x00);
+
+            try{
+                cc.cardCreateObject(objId, size, objACL);
+            }
+            catch (CardConnectorException ex) {
+                if (ex.getSW12()==JCconstants.SW_OBJECT_EXISTS){
+                    System.out.println("TestObject - delete existing object!");
+                    cc.cardDeleteObject(objId, (byte)0x01);
+                }
+                if (ex.getSW12()==JCconstants.SW_NO_MEMORY_LEFT){
+                    System.out.println("TestObject - out of memory!");
+                    //cc.cardDeleteObject(objId, (byte)0x01);
+                    return;
+                }
+            }
+            cc.cardWriteObject(objId, objData);
+            byte[] objCopy= cc.cardReadObject(objId);
+            assertArrayEquals(objData,objCopy);    
+            cc.cardDeleteObject(objId, (byte)0x01);
+        }      
+    }
+    
     public static void TestGenerateKeyPair(CardConnector cc, byte alg_type, byte priv_key_nbr, byte pub_key_nbr, short key_size) throws CardConnectorException{
 
-        byte[] priv_key_ACL= {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-        byte[] pub_key_ACL= {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        byte[] priv_key_ACL= DEFAULT_ACL; // {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        byte[] pub_key_ACL= DEFAULT_ACL; //{0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
         byte gen_opt= JCconstants.OPT_DEFAULT;
         byte[] gen_opt_param={};
         String stralg="";
@@ -255,7 +286,7 @@ public class SatoChipClient {
 
     public static void TestGenerateSymmetricKey(CardConnector cc, byte algtype, byte keynbr, short keysize) throws CardConnectorException{
         
-        byte[] keyACL=DEFAULT_KEY_ACL;
+        byte[] keyACL=DEFAULT_ACL;
             
         String stralg="";
         if (algtype==JCconstants.TYPE_DES)
@@ -280,7 +311,7 @@ public class SatoChipClient {
     public static void TestImportKey(CardConnector cc, byte key_type, byte key_nbr, short key_size) throws CardConnectorException{
 
             byte key_encoding= 0x00; //plain
-            byte[] key_ACL= {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            byte[] key_ACL= DEFAULT_ACL; //{0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
             String stralg="";
             String strkey="";
             short keysize= key_size;
@@ -501,7 +532,7 @@ public class SatoChipClient {
         // import seed to HWchip
         long startTime = System.currentTimeMillis();
         byte[] seed= DatatypeConverter.parseHexBinary(strseed); 
-        byte[] seed_ACL= {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        byte[] seed_ACL= DEFAULT_ACL; //{0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
         byte[] response= cc.cardBip32ImportSeed(seed_ACL, seed);
         //String masterkey, chaincode;
         long stopTime = System.currentTimeMillis();
@@ -1009,9 +1040,9 @@ public class SatoChipClient {
             byte[] ublk_1={0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38};
             short secmemsize= 0x1000;
             short memsize= 0x1000;
-            byte create_object_ACL= 0x00;
-            byte create_key_ACL= 0x00;
-            byte create_pin_ACL= 0x00;
+            byte create_object_ACL= 0x01;
+            byte create_key_ACL= 0x01;
+            byte create_pin_ACL= 0x01;
             try{
                 cc.cardSetup(pin_tries_0, ublk_tries_0, pin_0, ublk_0,
                     pin_tries_1, ublk_tries_1, pin_1, ublk_1, 
@@ -1033,6 +1064,10 @@ public class SatoChipClient {
             cc.cardListKeys();
             System.out.println("*****************");
             
+            // test object creation/destruction
+            TestObject(cc);
+            //exit(0);
+
             // gen key
             //TestGenerateKeyPair(cc, JCconstants.ALG_RSA_CRT, (byte)0x00, (byte)0x01, (short)512);// doesn't work?
             TestGenerateKeyPair(cc, JCconstants.ALG_RSA, (byte)0x02, (byte)0x03, (short)512);
