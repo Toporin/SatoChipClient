@@ -25,6 +25,8 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.logging.ConsoleHandler;
+import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.smartcardio.Card;
@@ -35,13 +37,14 @@ import javax.smartcardio.CommandAPDU;
 import javax.smartcardio.ResponseAPDU;
 import javax.smartcardio.TerminalFactory;
 
-
 /**
  *
  * @author Toporin
  */
 public class CardConnector {
    
+    private final static Logger logger = Logger.getLogger(CardConnector.class.getName());
+    
     /* constants declaration */
     private Card card; 
     private CardChannel channel; 
@@ -55,13 +58,22 @@ public class CardConnector {
 
     // constructor
     public CardConnector(){
+        //default log data to console
+        this(new ConsoleHandler(), Level.INFO);
+    }
+    
+    public CardConnector(Handler handle, Level level){
+        
+        //default log data
+        logger.addHandler(handle);
+        logger.setLevel(level);
         
         terminalfactory = TerminalFactory.getDefault();
         try {
             listterminal = terminalfactory.terminals().list();
-            System.out.println("Terminals: " + listterminal);
+            logger.log(Level.INFO, "Terminals: {0}", listterminal);
             if (listterminal.isEmpty()) {
-                    System.out.println("No terminals found.");
+                    logger.log(Level.SEVERE, "No terminals found.");
                     return;
             }
             // Get the first terminal in the list
@@ -72,13 +84,11 @@ public class CardConnector {
             e.printStackTrace();
         }
 
-        System.out.println("Card: " + card);
         ATR = card.getATR().getBytes();
-        System.out.println("ATR: " + toString(ATR));
         channel = card.getBasicChannel();
     }
-
-    public void disconect() throws CardException{
+    
+    public void disconnect() throws CardException{
         card.disconnect(true);
     }
     
@@ -92,22 +102,22 @@ public class CardConnector {
     */
     public static String toString(byte[] bytes) {
             
-            if (bytes==null)
-                return "null";
-        
-            final String hexChars = "0123456789ABCDEF";
-            StringBuffer sbTmp = new StringBuffer();
-            char[] cTmp = new char[2];
+        if (bytes==null)
+            return "null";
 
-            //System.out.println(bytes);//debug
-            for (int i = 0; i < bytes.length; i++) {
-                    cTmp[0] = hexChars.charAt((bytes[i] & 0xF0) >>> 4);
-                    cTmp[1] = hexChars.charAt(bytes[i] & 0x0F);
-                    sbTmp.append(cTmp);
-            }
-            //System.out.println(sbTmp.toString());//debug
+        final String hexChars = "0123456789ABCDEF";
+        StringBuffer sbTmp = new StringBuffer();
+        char[] cTmp = new char[2];
 
-            return sbTmp.toString();
+        //logger.log(Level.FINE,bytes);//debug
+        for (int i = 0; i < bytes.length; i++) {
+                cTmp[0] = hexChars.charAt((bytes[i] & 0xF0) >>> 4);
+                cTmp[1] = hexChars.charAt(bytes[i] & 0x0F);
+                sbTmp.append(cTmp);
+        }
+        //logger.log(Level.FINE,sbTmp.toString());//debug
+
+        return sbTmp.toString();
     }
     
     // Exchange APDU with javacard 
@@ -119,9 +129,9 @@ public class CardConnector {
         } catch (CardException ex) {
             throw new CardConnectorException("CardException during connection", c, r);
         }
-        System.out.println("SW12 <<<: "	+ Integer.toHexString(r.getSW1()&0xFF) + " " + Integer.toHexString(r.getSW2()&0xFF) );		
         sw12= (short)r.getSW();
         if (sw12!=JCconstants.SW_OK){
+            logger.log(Level.WARNING, "SW12 <<<: {0}", Integer.toHexString(sw12&0xFFFF));
             throw new CardConnectorException("exchangeAPDU error", c, r);
         }
         return r.getData();
@@ -136,108 +146,104 @@ public class CardConnector {
     public CommandAPDU getLastCommand(){
         return c;
     }
-    /* convert a DER encoded signature to compact 65-byte format
-        input is hex string in DER format
-        output is hex string in compact 65-byteformat
-        http://bitcoin.stackexchange.com/questions/12554/why-the-signature-is-always-65-13232-bytes-long
-        https://bitcointalk.org/index.php?topic=215205.0            
-    */
-    public static byte[] toCompactSig(byte[] sigin, int recid, boolean compressed) {
-
-        byte[] sigout= new byte[65];
-        // parse input 
-        byte first= sigin[0];
-        if (first!= 0x30){
-            System.out.println("Wrong first byte!");
-            return new byte[0];
-        }
-        byte lt= sigin[1];
-        byte check= sigin[2];
-        if (check!= 0x02){
-            System.out.println("Check byte should be 0x02");
-            return new byte[0];
-        }
-        // extract r
-        byte lr= sigin[3];
-        for (int i= 0; i<=31; i++){
-            byte tmp= sigin[4+lr-1-i];
-            if (lr>=(i+1)) {
-                sigout[32-i]= tmp;
-            } else{ 
-                sigout[32-i]=0;  
-            }
-        }
-        // extract s
-        check= sigin[4+lr];
-        if (check!= 0x02){
-            System.out.println("Second check byte should be 0x02");
-            return new byte[0];
-        }
-        byte ls= sigin[5+lr];
-        if (lt != (lr+ls+4)){
-            System.out.println("Wrong lt value");
-            return new byte[0];
-        }
-        for (int i= 0; i<=31; i++){
-            byte tmp= sigin[5+lr+ls-i];
-            if (ls>=(i+1)) {
-                sigout[64-i]= tmp;
-            } else{ 
-                sigout[32-i]=0;  
-            }
-        }
-
-        // 1 byte header
-        if (recid>3 || recid<0){
-            System.out.println("Wrong recid value");
-            return new byte[0];
-        }
-        if (compressed){
-            sigout[0]= (byte)(27 + recid + 4 );
-        }else{
-            sigout[0]= (byte)(27 + recid);                
-        }
-
-        return sigout;
+    public void logCommandAPDU(String name, byte cla, byte ins, byte p1, byte p2, byte[] data, byte le){
+        logger.log(
+                Level.FINE, 
+                name+"\n\t APDU>> cla:{0} ins:{1} p1:{2} p2:{3} le:{4} data:{5}",
+                new Object[]{
+                    Integer.toHexString(cla & 0xFF), 
+                    Integer.toHexString(ins & 0xFF), 
+                    Integer.toHexString(p1 & 0xFF), 
+                    Integer.toHexString(p2 & 0xFF), 
+                    Integer.toHexString(le & 0xFF), 
+                    toString(data)}
+        );
+    }
+    public void logResponseAPDU(byte[] response){
+        if (response!=null && response.length>0)
+            logger.log(Level.FINE, "\t APDU<< {0}", toString(response));
     }
     
-//    public static byte[] recoverPublicKeyFromSig(int recID, byte[] msg, byte[] sig, boolean doublehash){
-//        
-//        //if (true)
-//        //    throw new CardConnectorException("debug bitcoinj", (byte)0, (short)0 );
-//        
-//        ECKey.ECDSASignature ecdsasig= toECDSASignature(sig);
-//        Sha256Hash msghash= Sha256Hash.create(msg); // compute sha256 of message
-//        if (doublehash){
-//            msghash= Sha256Hash.create(msghash.getBytes());
+//    /* convert a DER encoded signature to compact 65-byte format
+//        input is hex string in DER format
+//        output is hex string in compact 65-byteformat
+//        http://bitcoin.stackexchange.com/questions/12554/why-the-signature-is-always-65-13232-bytes-long
+//        https://bitcointalk.org/index.php?topic=215205.0            
+//    */
+//    public static byte[] toCompactSig(byte[] sigin, int recid, boolean compressed) {
+//
+//        byte[] sigout= new byte[65];
+//        // parse input 
+//        byte first= sigin[0];
+//        if (first!= 0x30){
+//            System.out.println("Wrong first byte!");
+//            return new byte[0];
 //        }
-//        com.google.bitcoin.core.ECKey pkey= ECKey.recoverFromSignature(recID, ecdsasig, msghash, true);
-//        if (pkey!=null)
-//            return pkey.getPubKey();
-//        else
-//            return null;
-//            
+//        byte lt= sigin[1];
+//        byte check= sigin[2];
+//        if (check!= 0x02){
+//            System.out.println("Check byte should be 0x02");
+//            return new byte[0];
+//        }
+//        // extract r
+//        byte lr= sigin[3];
+//        for (int i= 0; i<=31; i++){
+//            byte tmp= sigin[4+lr-1-i];
+//            if (lr>=(i+1)) {
+//                sigout[32-i]= tmp;
+//            } else{ 
+//                sigout[32-i]=0;  
+//            }
+//        }
+//        // extract s
+//        check= sigin[4+lr];
+//        if (check!= 0x02){
+//            System.out.println("Second check byte should be 0x02");
+//            return new byte[0];
+//        }
+//        byte ls= sigin[5+lr];
+//        if (lt != (lr+ls+4)){
+//            System.out.println("Wrong lt value");
+//            return new byte[0];
+//        }
+//        for (int i= 0; i<=31; i++){
+//            byte tmp= sigin[5+lr+ls-i];
+//            if (ls>=(i+1)) {
+//                sigout[64-i]= tmp;
+//            } else{ 
+//                sigout[32-i]=0;  
+//            }
+//        }
+//
+//        // 1 byte header
+//        if (recid>3 || recid<0){
+//            System.out.println("Wrong recid value");
+//            return new byte[0];
+//        }
+//        if (compressed){
+//            sigout[0]= (byte)(27 + recid + 4 );
+//        }else{
+//            sigout[0]= (byte)(27 + recid);                
+//        }
+//
+//        return sigout;
 //    }
     
     // SELECT Command
     public byte[] cardSelect(byte[] AID) throws CardConnectorException {
-            // See GlobalPlatform Card Specification (e.g. 2.2, section 11.9)
-            byte cla= 0x00;
-            byte ins= (byte)0xA4;
-            byte p1= 0x04;
-            byte p2=0x00;
-            byte le= 0x00;
-            System.out.println("CardSelect");
-            System.out.println("APDU >>>: "	+ toString(AID));	
-            byte[] response;
-            response = exchangeAPDU(cla, ins, p1, p2, AID, le);
-            System.out.println("APDU <<<: "	+ toString(response));
-            
-            return response;
+        // See GlobalPlatform Card Specification (e.g. 2.2, section 11.9)
+        byte cla= 0x00;
+        byte ins= (byte)0xA4;
+        byte p1= 0x04;
+        byte p2=0x00;
+        byte le= 0x00;
+        
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, AID, le);
+        return response;
     }
 
     /**
-     * Card Setup (API not clear)
+     * Card Setup (todo: clarify API)
      * 
      * **/
     public byte[] cardSetup( 
@@ -246,7 +252,9 @@ public class CardConnector {
                     byte pin_tries_1, byte ublk_tries_1, 
                     byte[] pin_1, byte[] ublk_1,
                     short memsize, short memsize2, 
-                    byte create_object_ACL, byte create_key_ACL, byte create_pin_ACL) throws CardConnectorException {
+                    byte create_object_ACL, byte create_key_ACL, byte create_pin_ACL,
+                    short option_flags,
+                    byte[] hmacsha160_key, long amount_limit) throws CardConnectorException {
 
         // to do: check pin sizes < 256
         byte[] pin={0x4D, 0x75, 0x73, 0x63, 0x6C, 0x65, 0x30, 0x30}; // default pin
@@ -258,8 +266,11 @@ public class CardConnector {
         // data=[pin_length(1) | pin | 
         //       pin_tries0(1) | ublk_tries0(1) | pin0_length(1) | pin0 | ublk0_length(1) | ublk0 | 
         //       pin_tries1(1) | ublk_tries1(1) | pin1_length(1) | pin1 | ublk1_length(1) | ublk1 | 
-        //       memsize(2) | memsize2(2) | ACL(3) ]
-        byte[] data= new byte[16+pin.length+pin_0.length+pin_1.length+ublk_0.length+ublk_1.length]; 
+        //       memsize(2) | memsize2(2) | ACL(3) |
+        //       option_flags(2) | hmacsha160_key(20) | amount_limit(8)]
+        int optionsize= ((option_flags==0)?0:2) + (((option_flags&0x8000)==0x8000)?28:0);
+        int datasize= 16+pin.length+pin_0.length+pin_1.length+ublk_0.length+ublk_1.length+optionsize;
+        byte[] data= new byte[datasize]; 
         byte le= 0x00;
         short base=0;
         //initial PIN check
@@ -290,7 +301,7 @@ public class CardConnector {
         for (int i=0; i<ublk_1.length; i++){
                 data[base++]=ublk_1[i]; 
         }
-        // 2bytes unused?
+        // 2bytes 
         data[base++]= (byte)(memsize>>8);
         data[base++]= (byte)(memsize&0x00ff);
         // mem_size
@@ -300,17 +311,42 @@ public class CardConnector {
         data[base++]= create_object_ACL;
         data[base++]= create_key_ACL;
         data[base++]= create_pin_ACL;
-
-        // send apdu
-        System.out.println("cardSetup");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response = null;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-        return response;
-            
+        // option_flags
+        if (option_flags!=0){
+            data[base++]= (byte)(option_flags>>8);
+            data[base++]= (byte)(option_flags&0x00ff);
+            // hmacsha1_key
+            System.arraycopy(hmacsha160_key, 0, data, base, 20);
+            base+=20;
+            // amount_limit
+            for (int i=56; i>=0; i-=8){
+                data[base++]=(byte)((amount_limit>>i)&0xff);
+            }
+        }
+        // send apdu (contains sensitive data!)
+        byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        return response;        
     }
 
+    /**
+     * Card Setup (API not clear)
+     * 
+     * **/
+    public byte[] cardSetup( 
+                    byte pin_tries_0, byte ublk_tries_0, 
+                    byte[] pin_0, byte[] ublk_0,
+                    byte pin_tries_1, byte ublk_tries_1, 
+                    byte[] pin_1, byte[] ublk_1,
+                    short memsize, short memsize2, 
+                    byte create_object_ACL, byte create_key_ACL, byte create_pin_ACL) throws CardConnectorException {
+        
+        return cardSetup( 
+                    pin_tries_0, ublk_tries_0, pin_0, ublk_0,
+                    pin_tries_1, ublk_tries_1, pin_1, ublk_1,
+                    memsize, memsize2, create_object_ACL, create_key_ACL, create_pin_ACL,
+                    (short)0, null, 0);     
+    }
+    
     public byte[] cardBip32ImportSeed(byte[] keyACL, byte[] seed) throws CardConnectorException{
 
         byte cla= JCconstants.CardEdge_CLA;
@@ -326,13 +362,8 @@ public class CardConnector {
         data[base++]= (byte)seed.length;
         System.arraycopy(seed, 0, data, base, seed.length);
 
-        // send apdu
-        System.out.println("ImportBIP32Seed");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response)); 
-
+        // send apdu (contains sensitive data!)
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
         return response;
     }
 
@@ -347,12 +378,9 @@ public class CardConnector {
         short base=0;
 
         // send apdu
-        System.out.println("GetBip32AuthentiKey");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response)); 
-
+        logCommandAPDU("cardBip32GetAuthentiKey", cla, ins, p1, p2, data, le);
+        byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
     }
 
@@ -370,18 +398,20 @@ public class CardConnector {
         base+=path.length;
 
         // send apdu
-        System.out.println("GetBip32ExtendedKey");
-        System.out.println("APDU >>>: "	+ toString(data));
         byte[] response=null;
         try{
+            // send apdu
+            logCommandAPDU("GetBip32ExtendedKey",cla, ins, p1, p2, data, le);        
             response = exchangeAPDU(cla, ins, p1, p2, data, le);
-            System.out.println("APDU <<<: "	+ toString(response)); 
+            logResponseAPDU(response);
         }
         catch(CardConnectorException ex){
             // if there is no more memory available, erase cache...
             if (ex.getIns()==JCconstants.INS_BIP32_GET_EXTENDED_KEY && ex.getSW12()==JCconstants.SW_NO_MEMORY_LEFT){
-                System.out.println("GetBip32ExtendedKey - out of memory: reset internal memory");
+                logger.log(Level.INFO,"GetBip32ExtendedKey - out of memory: reset internal memory");
+                logCommandAPDU("GetBip32ExtendedKey-reset",cla, ins, p1, p2, data, le);        
                 response = exchangeAPDU(cla, ins, p1, (byte)0xFF, data, le);
+                logResponseAPDU(response);
             }
             else{
                 throw ex;
@@ -413,12 +443,10 @@ public class CardConnector {
         data[base++]=(byte) ((buffer_left) & 0xff); 
 
         // send apdu
-        System.out.println("cardSignBIP32Message - INIT");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-
+        logCommandAPDU("cardSignBIP32Message - INIT",cla, ins, p1, p2, data, le);        
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
+        
         // CIPHER PROCESS/UPDATE (optionnal)
         while(buffer_left>chunk){
 
@@ -436,16 +464,14 @@ public class CardConnector {
                 buffer_left-=chunk;
 
                 // send apdu
-                System.out.println("cardSignBIP32Message - PROCESS");
-                System.out.println("APDU data >>>: " + toString(data));
-                System.out.println("APDU datasize >>>: " + data.length);
+                logCommandAPDU("cardSignBIP32Message - PROCESS",cla, ins, p1, p2, data, le);        
                 response= exchangeAPDU(cla, ins, p1, p2, data, le);
-                System.out.println("APDU <<<: "	+ toString(response));
+                logResponseAPDU(response);
         }		
 
         // CIPHER FINAL/SIGN (last chunk)
         chunk= buffer_left; //following while condition, buffer_left<=chunk
-        System.out.println("chunk value= "	+ chunk);
+        logger.log(Level.FINE, "chunk value= {0}", chunk);
         //cla= JCconstants.CardEdge_CLA;
         //ins= INS_COMPUTE_CRYPT;
         //p1= key_nbr;
@@ -460,11 +486,9 @@ public class CardConnector {
         buffer_left-=chunk;
 
         // send apdu
-        System.out.println("cardSignBIP32Message - FINALIZE");
-        System.out.println("APDU >>>: "	+ toString(data));
+        logCommandAPDU("cardSignBIP32Message-FINALIZE",cla, ins, p1, p2, data, le);        
         response= exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-
+        logResponseAPDU(response);
         return response;
 
     }
@@ -487,11 +511,9 @@ public class CardConnector {
         base+=message.length;
 
         // send apdu
-        System.out.println("SignShortBip32Message:");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response)); 
+        logCommandAPDU("SignShortBip32Message",cla, ins, p1, p2, data, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
 
     }
@@ -526,25 +548,23 @@ public class CardConnector {
             
             result= TransactionParser.parseTransaction(transaction);
             if (result== TransactionParser.RESULT_ERROR){
-                System.out.println("Error during parsing");
+                logger.log(Level.WARNING,"Error during parsing");
                 return null;
             }
             data= TransactionParser.getDataChunk();
             digestFull.update(data, 0, data.length);
 
-            // send apdu
+            // log state & send apdu
             if (result== TransactionParser.RESULT_FINISHED){
                 le= 52; // [nb_input(4) | nb_output(4) | coord_actif_input(4) | amount(8) | hash(32) | sig?] 
-                System.out.println("cardParseTransaction - FINISH");
+                logCommandAPDU("cardParseTransaction-FINISH",cla, ins, p1, p2, data, le);
             }
             else if (p1== JCconstants.OP_INIT)
-                System.out.println("cardParseTransaction - INIT");
+                logCommandAPDU("cardParseTransaction-INIT",cla, ins, p1, p2, data, le);
             else if (p1== JCconstants.OP_PROCESS)
-                System.out.println("cardParseTransaction - PROCESS");
-            System.out.println("APDU >>>: "	+ toString(data));
+                logCommandAPDU("cardParseTransaction-PROCESS",cla, ins, p1, p2, data, le);
             response= exchangeAPDU(cla, ins, p1, p2, data, le);
-            System.out.println("APDU <<<: "	+ toString(response));
-            Logger.getLogger(CardConnector.class.getName()).log(Level.SEVERE, "cardParseTranaction: while apdu response:"+CardConnector.toString(response));
+            logResponseAPDU(response);
             
             // switch to process mode after initial call to parse
             p1= JCconstants.OP_PROCESS;
@@ -577,6 +597,43 @@ public class CardConnector {
         return response;
     }
 
+    public byte[] cardParseTx(byte[] transaction) throws CardConnectorException{
+            
+        byte cla= JCconstants.CardEdge_CLA;
+        byte ins= JCconstants.INS_PARSE_TRANSACTION;
+        byte p1= JCconstants.OP_INIT;
+        byte p2= 0x00;
+        byte[] data; 
+        byte le= 0x00; 
+        byte[] response=null;
+        
+        // init transaction data and context
+        TxParser txparser= new TxParser(transaction);
+        while(!txparser.isParsed()){
+            
+            data= txparser.parseTransaction();
+            
+            // log state & send apdu
+            if (txparser.isParsed()){
+                le= 86; // [hash(32) | sigsize(2) | sig | nb_input(4) | nb_output(4) | coord_actif_input(4) | amount(8)] 
+                logCommandAPDU("cardParseTransaction - FINISH",cla, ins, p1, p2, data, le);
+            }
+            else if (p1== JCconstants.OP_INIT)
+                logCommandAPDU("cardParseTransaction-INIT",cla, ins, p1, p2, data, le);    
+            else if (p1== JCconstants.OP_PROCESS)
+                logCommandAPDU("cardParseTransaction - PROCESS",cla, ins, p1, p2, data, le); 
+            response= exchangeAPDU(cla, ins, p1, p2, data, le);
+            logResponseAPDU(response);
+            
+            // switch to process mode after initial call to parse
+            p1= JCconstants.OP_PROCESS; 
+        }
+        logger.log(Level.INFO, "Single transaction hash:{0}", toString(txparser.getTxHash()));
+        logger.log(Level.INFO, "Double transaction hash:{0}", toString(txparser.getTxDoubleHash()));
+        
+        return response;
+    }
+    
     public byte[] cardSignTransaction(byte keynbr, byte[] txhash, byte[] chalresponse) throws CardConnectorException{
 
         byte cla= JCconstants.CardEdge_CLA;
@@ -598,11 +655,9 @@ public class CardConnector {
             System.arraycopy(chalresponse, 0, data, txhash.length, chalresponse.length);
         }
         
-        System.out.println("cardSignTransaction");
-        System.out.println("APDU >>>: "	+ toString(data));
+        logCommandAPDU("cardSignTransaction",cla, ins, p1, p2, data, le);
         response= exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-        
+        logResponseAPDU(response);
         return response;
     }
     
@@ -611,7 +666,7 @@ public class CardConnector {
             byte key_encoding, byte key_type, short key_size, byte[] key_blob) throws CardConnectorException{
 
         if (key_blob.length>242){
-            System.out.println("Invalid data size (>242)");
+            logger.log(Level.WARNING,"Invalid data size (>242)");
             return null;
         }
 
@@ -634,12 +689,9 @@ public class CardConnector {
         base+=key_blob.length;
 
         // import key command (data taken from imported object)
-        System.out.println("cardImportKey");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-        
+        logCommandAPDU("cardImportKey",cla, ins, p1, p2, null, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
     }
 
@@ -653,12 +705,9 @@ public class CardConnector {
         byte le= 0x00;
         
         // send apdu
-        System.out.println("cardGetPublicKeyFromPrivate");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-        
+        logCommandAPDU("cardGetPublicKeyFromPrivate", cla, ins, p1, p2, data, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
     }
     
@@ -691,11 +740,9 @@ public class CardConnector {
         base+=gen_opt_param.length;
 
         // send apdu
-        System.out.println("cardGenKeyPair");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
+        logCommandAPDU("cardGenKeyPair",cla, ins, p1, p2, data, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
     }
 
@@ -721,11 +768,9 @@ public class CardConnector {
         }
         
         // send apdu
-        System.out.println("cardGenSymmetricKey");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
+        logCommandAPDU("cardGenSymmetricKey",cla, ins, p1, p2, data, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
     }
     
@@ -752,12 +797,10 @@ public class CardConnector {
         data[base++]=(byte) 0; // size!=0 for DES macing with IV
 
         // send apdu
-        System.out.println("cardComputeSign - INIT");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-
+        logCommandAPDU("cardComputeSign-INIT",cla, ins, p1, p2, data, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
+        
         // CIPHER PROCESS/UPDATE (optionnal)
         while(buffer_left>chunk){
 
@@ -776,17 +819,15 @@ public class CardConnector {
                 buffer_left-=chunk;
 
                 // send apdu
-                System.out.println("cardComputeSign - PROCESS");
-                System.out.println("APDU data >>>: " + toString(data));
-                System.out.println("APDU datasize >>>: " + data.length);
+                logCommandAPDU("cardComputeSign-PROCESS",cla, ins, p1, p2, data, le);
                 response= exchangeAPDU(cla, ins, p1, p2, data, le);
-                System.out.println("APDU <<<: "	+ toString(response));
+                logResponseAPDU(response);
         }		
 
         // CIPHER FINAL/SIGN (last chunk)
         if (CD == JCconstants.MODE_SIGN){
                 chunk= buffer_left; //following while condition, buffer_left<=chunk
-                System.out.println("chunk value= "	+ chunk);
+                logger.log(Level.FINE, "chunk value= {0}", chunk);
                 //cla= JCconstants.CardEdge_CLA;
                 //ins= INS_COMPUTE_CRYPT;
                 //p1= key_nbr;
@@ -802,10 +843,9 @@ public class CardConnector {
                 buffer_left-=chunk;
 
                 // send apdu
-                System.out.println("cardComputeSign - FINALIZE");
-                System.out.println("APDU >>>: "	+ toString(data));
+                logCommandAPDU("cardComputeSign-FINALIZE",cla, ins, p1, p2, data, le);
                 response= exchangeAPDU(cla, ins, p1, p2, data, le);
-                System.out.println("APDU <<<: "	+ toString(response));
+                logResponseAPDU(response);
                 //signature= new byte[response.length-2]; // datachunk is 1 short + data
                 //System.arraycopy(response, 2, signature, 0, response.length-2);
                 return response;
@@ -832,12 +872,9 @@ public class CardConnector {
                 base+=sign_length;
 
                 // send apdu
-                System.out.println("cardComputeVerify - FINALIZE");
-                System.out.println("APDU >>>: "	+ toString(data));
-                System.out.println("LE= " + le);//debug
-                System.out.println("data length= " + data.length);//debug
+                logCommandAPDU("cardComputeVerify-FINALIZE",cla, ins, p1, p2, data, le);
                 response= exchangeAPDU(cla, ins, p1, p2, data, le);
-                System.out.println("APDU <<<: "	+ toString(response));			
+                logResponseAPDU(response);
         }
 
         return response;
@@ -871,11 +908,11 @@ public class CardConnector {
             byte[] paddedbuffer= new byte[paddedlength];
             Arrays.fill(paddedbuffer, (byte)paddinglength);
             System.arraycopy(buffer, 0, paddedbuffer, 0, buffer.length);
-//            System.out.println("PADDING:");
-//            System.out.println("length:"+buffer.length);
-//            System.out.println("paddedlength:"+paddedlength);
-//            System.out.println("paddinglength:"+paddinglength);
-//            System.out.println("paddedbuffer:"+toString(paddedbuffer));
+//            logger.log(Level.FINE,"PADDING:");
+//            logger.log(Level.FINE,"length:"+buffer.length);
+//            logger.log(Level.FINE,"paddedlength:"+paddedlength);
+//            logger.log(Level.FINE,"paddinglength:"+paddinglength);
+//            logger.log(Level.FINE,"paddedbuffer:"+toString(paddedbuffer));
             buffer=paddedbuffer;
         }
         
@@ -911,15 +948,13 @@ public class CardConnector {
         bufferLeft-=IVlength;
 
         // send apdu
-        System.out.println("cardComputeCrypt - INIT");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
+        logCommandAPDU("cardComputeCrypt-INIT",cla, ins, p1, p2, data, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         // recover IV from card (for CD=ENCRYPT && CM=CBC)
         ByteArrayOutputStream bos= new ByteArrayOutputStream(buffer.length+IVlength);
         bos.write(response,0,response.length);
-        System.out.println("IV: "+ toString(response));
+        logResponseAPDU(response);
         
         // CIPHER PROCESS/UPDATE (optionnal)
         while(bufferLeft>chunk){
@@ -938,19 +973,17 @@ public class CardConnector {
                 bufferLeft-=chunk;
 
                 // send apdu
-                System.out.println("cardComputeCrypt - PROCESS");
-                System.out.println("APDU data >>>: " + toString(data));
-                System.out.println("APDU datasize >>>: " + data.length);
+                logCommandAPDU("cardComputeCrypt - PROCESS",cla, ins, p1, p2, data, le);
                 response= exchangeAPDU(cla, ins, p1, p2, data, le);
-                System.out.println("APDU <<<: "	+ toString(response));
-                
+                logResponseAPDU(response);
+        
                 // update output
                 bos.write(response,2,response.length-2);                               
         }		
 
         // CIPHER FINAL (last chunk)
         chunk= bufferLeft; //following while condition, buffer_left<=chunk
-        System.out.println("chunk value= "	+ chunk);
+        logger.log(Level.FINE, "chunk value= {0}", chunk);
         //cla= JCconstants.CardEdge_CLA;
         //ins= INS_COMPUTE_CRYPT;
         //p1= key_nbr;
@@ -966,10 +999,9 @@ public class CardConnector {
         bufferLeft-=chunk;
 
         // send apdu
-        System.out.println("cardComputeCrypt - FINALIZE");
-        System.out.println("APDU >>>: "	+ toString(data));
+        logCommandAPDU("cardComputeCrypt-FINALIZE",cla, ins, p1, p2, data, le);
         response= exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
+        logResponseAPDU(response);
         
         // update output
         bos.write(response,2,response.length-2);                               
@@ -983,10 +1015,10 @@ public class CardConnector {
             int paddinglength= paddedoutput[paddedoutput.length-1];
             output= new byte[paddedoutput.length-paddinglength];
             System.arraycopy(paddedoutput, 0, output, 0, output.length);
-//            System.out.println("UNPADDING");
-//            System.out.println("paddedlength:"+paddedoutput.length);
-//            System.out.println("paddinglength:"+paddinglength);
-//            System.out.println("paddedoutput:"+toString(paddedoutput));
+//            logger.log(Level.FINE,"UNPADDING");
+//            logger.log(Level.FINE,"paddedlength:"+paddedoutput.length);
+//            logger.log(Level.FINE,"paddinglength:"+paddinglength);
+//            logger.log(Level.FINE,"paddedoutput:"+toString(paddedoutput));
         }
         else{
             output= bos.toByteArray();
@@ -1008,20 +1040,17 @@ public class CardConnector {
                 data[base++]=msg[i]; 
         }
 
-        System.out.println("cardComputeSha512");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-
+        logCommandAPDU("cardComputeSha512",cla, ins, p1, p2, data, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
     }
-
-    public byte[] cardComputeHmacSha512(byte[] key, byte[] msg) throws CardConnectorException{
+    
+    public byte[] cardComputeHmac(byte sha, byte[] key, byte[] msg) throws CardConnectorException{
 
         byte cla= JCconstants.CardEdge_CLA;
         byte ins= JCconstants.INS_COMPUTE_HMACSHA512;
-        byte p1= 0x00;
+        byte p1= sha;
         byte p2= 0x00;
         byte[] data= new byte[key.length+msg.length+4]; 
         byte le= 64;
@@ -1036,15 +1065,15 @@ public class CardConnector {
         for (int i=0; i<msg.length; i++){
                 data[base++]=msg[i]; 
         }
-        System.out.println("cardComputeHmacSha512");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-
+        
+        logCommandAPDU("cardComputeHmac",cla, ins, p1, p2, data, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
     }
-
+    
+    /* PIN Management*/
+    
     public byte[] cardCreatePIN(byte pin_nbr, byte pin_tries, byte[] pin, byte[] ublk) throws CardConnectorException{
 
         byte cla= JCconstants.CardEdge_CLA;
@@ -1063,12 +1092,8 @@ public class CardConnector {
                 data[base++]=ublk[i]; 
         }
         // send apdu
-        System.out.println("cardCreatePIN");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-
+        logCommandAPDU("cardCreatPIN",cla, ins, p1, p2, null, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
         return response;
     }
 
@@ -1085,12 +1110,8 @@ public class CardConnector {
                 data[base++]=pin[i]; 
         }
         // send apdu
-        System.out.println("cardVerifyPIN");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-
+        logCommandAPDU("cardVerifyPIN",cla, ins, p1, p2, null, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
         return response;
 }
 
@@ -1112,13 +1133,9 @@ public class CardConnector {
                 data[base++]=new_pin[i]; 
         }
         // send apdu
-        System.out.println("cardChangePIN");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-        System.out.println("SW12 <<<: "	+ Integer.toHexString(response[response.length-2]&0xFF) + " " + Integer.toHexString(response[response.length-1]&0xFF) );		
-
+        logCommandAPDU("cardChangePIN",cla, ins, p1, p2, null, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        
         return response;
     }
 
@@ -1135,13 +1152,8 @@ public class CardConnector {
                 data[base++]=ublk[i]; 
         }
         // send apdu
-        System.out.println("cardUnblockPIN");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-        System.out.println("SW12 <<<: "	+ Integer.toHexString(response[response.length-2]&0xFF) + " " + Integer.toHexString(response[response.length-1]&0xFF) );				
-
+        logCommandAPDU("cardUnblockPIN",cla, ins, p1, p2, null, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
         return response;
     }
 
@@ -1155,13 +1167,9 @@ public class CardConnector {
         byte le= 0x00;
         
         // send apdu
-        System.out.println("cardLogoutAll");
-        System.out.println("APDU >>>: "	+ toString(data));
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-        System.out.println("SW12 <<<: "	+ Integer.toHexString(response[response.length-2]&0xFF) + " " + Integer.toHexString(response[response.length-1]&0xFF) );				
-
+        logCommandAPDU("cardLogoutAll",cla, ins, p1, p2, data, le);
+        byte[] response= exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
     }
         
@@ -1175,71 +1183,41 @@ public class CardConnector {
         byte le= 0x02;
 
         // send apdu
-        System.out.println("cardCreatePIN");
-        System.out.println("APDU >>>: ");
+        logger.log(Level.FINE,"cardListPIN");
+        logger.log(Level.FINE,"APDU >>>: ");
         byte[] response;
         response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("Data <<<: "	+ response[0] +  response[0]);
-        System.out.println("APDU <<<: "	+ toString(response));
-        System.out.println("SW12 <<<: "	+ Integer.toHexString(response[response.length-2]&0xFF) + " " + Integer.toHexString(response[response.length-1]&0xFF) );		
-
+        logResponseAPDU(response);
         return response;
     }
 
     public byte[] cardListKeys() throws CardConnectorException{
 
-        byte seq_opt=0x00;
         byte cla= JCconstants.CardEdge_CLA;
         byte ins= JCconstants.INS_LIST_KEYS;
-        byte p1= seq_opt;
+        byte p1= 0x00; // "get first entry" option
         byte p2= 0x00;
         byte[] data= null;
         byte le=0x0B; // 11 bytes expected?
 
         int datasize= 0;
         byte[] response;
-        System.out.println("cardListKeys");
-        System.out.println("APDU >>>: ");
-
+        ByteArrayOutputStream baos= new ByteArrayOutputStream(200); 
+        
         do{
-            p1=seq_opt;
-
             response= exchangeAPDU(cla, ins, p1, p2, data, le);
-            System.out.println("APDU <<<: "	+ toString(response));
-            // key info
-            datasize= response.length;
-            short base=0; 
-            if (datasize>0){// datasize==11 
-                byte key_nbr= response[base++];
-                byte key_type= response[base++];
-                byte key_partner= response[base++];
-                short key_size= (short) (((short)response[base++])<<8 +  ((short)response[base++])); // to check order?
-                int[] key_ACL= new int[JCconstants.KEY_ACL_SIZE];
-                for (short i= 0; i<JCconstants.KEY_ACL_SIZE; i++){
-                        key_ACL[i]=(int)response[base++];
-                }
-                System.out.println("datasize(11?) <<<: " + datasize );
-                System.out.println("key nbr <<<: " + (int)key_nbr );
-                System.out.println("key type <<<: " + key_type );
-                System.out.println("key partner <<<: " + (int)key_partner );
-                System.out.println("key size <<<: " + (int)key_size );
-                System.out.println("key ACL RWU <<<: " + 
-                        Integer.toBinaryString( key_ACL[1]+(key_ACL[0]<<8) ) +" "+
-                        Integer.toBinaryString( key_ACL[3]+(key_ACL[2]<<8) ) +" "+
-                        Integer.toBinaryString( key_ACL[5]+(key_ACL[4]<<8) )); // to check order?
-            }
-
-            // "get next entry" option
-            seq_opt=0x01;
+            baos.write(response, 0, response.length);
+            
+            p1=0x01; // "get next entry" option
         }
         while (datasize>0); // while there are key entries
 
-        return response;
+        return baos.toByteArray();
     }
     
     /**
     * This function creates an object that will be identified by the provided object ID.
-    * The object’s space and name will be allocated until deleted using MSCDeleteObject.
+    * The objectâ€™s space and name will be allocated until deleted using MSCDeleteObject.
     * The object will be allocated upon the card's memory heap. 
     * Object creation is only allowed if the object ID is available and logged in
     * identity(-ies) have sufficient privileges to create objects.
@@ -1272,18 +1250,16 @@ public class CardConnector {
         System.arraycopy(objACL, 0, data, 8, JCconstants.KEY_ACL_SIZE);
         
         // send apdu
-        System.out.println("cardCreateObject");
-        System.out.println("APDU >>>: ");
+        logCommandAPDU("cardCreateObject",cla, ins, p1, p2, data, le);
         byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));   
-        
+        logResponseAPDU(response);
         return response;
     }
     
     /**
-    * This function deletes the object identified by the provided object ID. The object’s
+    * This function deletes the object identified by the provided object ID. The objectâ€™s
     * space and name will be removed from the heap and made available for other objects.
-    * The zero flag denotes whether the object’s memory should be zeroed after
+    * The zero flag denotes whether the objectâ€™s memory should be zeroed after
     * deletion. This kind of deletion is recommended if object was storing sensitive data.
     *   
     * ins: 0x52
@@ -1308,11 +1284,9 @@ public class CardConnector {
         data[offset++]= (byte)((objId) & 0xff);
         
         // send apdu
-        System.out.println("cardDeleteObject");
-        System.out.println("APDU >>>: ");
+        logCommandAPDU("cardDeleteObject",cla, ins, p1, p2, data, le);
         byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));   
-        
+        logResponseAPDU(response);
         return response;
     }
     
@@ -1320,7 +1294,7 @@ public class CardConnector {
     * This function (over-)writes data to an object that has been previously created with
     * CreateObject. Provided Object Data is stored starting from the byte specified
     * by the Offset parameter. The size of provided object data must be exactly (Data
-    * Length – 8) bytes. Provided offset value plus the size of provided Object Data
+    * Length â€“ 8) bytes. Provided offset value plus the size of provided Object Data
     * must not exceed object size. 
     * Up to 246 bytes can be transferred with a single APDU. If more bytes need to be
     * transferred, then multiple WriteObject commands must be used with different offsets.
@@ -1370,11 +1344,9 @@ public class CardConnector {
         System.arraycopy(objData, objOffset, data, offset, objLength);
         
         // send apdu
-        System.out.println("cardWriteObject-offset:"+objOffset);
-        System.out.println("APDU >>>: ");
+        logCommandAPDU("cardWriteObject-offset",cla, ins, p1, p2, null, le);
         byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));   
-        
+        logResponseAPDU(response);
         return response;
     }
     
@@ -1385,7 +1357,7 @@ public class CardConnector {
     * If more bytes need to be transferred, then multiple ReadObject commands must 
     * be used with different offsets. 
     * Object data will be effectively read only if logged in identity(ies) have 
-    * sufficient privileges for the operation, according to the object’s ACL.
+    * sufficient privileges for the operation, according to the objectâ€™s ACL.
     *   
     * ins: 0x56
     * p1: 0x00
@@ -1438,11 +1410,9 @@ public class CardConnector {
         data[offset++]= (byte) objLength;
         
         // send apdu
-        System.out.println("cardReadObject-offset:"+objOffset);
-        System.out.println("APDU >>>: ");
+        logCommandAPDU("cardReadObject-offset",cla, ins, p1, p2, data, le);
         byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));   
-        
+        logResponseAPDU(response);
         return response;
     }
     
@@ -1472,12 +1442,10 @@ public class CardConnector {
         data[offset++]= (byte)((objId) & 0xff);
         
         // send apdu
-        System.out.println("cardGetObjectSize:");
-        System.out.println("APDU >>>: ");
+        logCommandAPDU("cardGetObjectSize",cla, ins, p1, p2, data, le);
         byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));   
+        logResponseAPDU(response);
         short objSize= (short) (((response[0]&0xff)<<8)+(response[1]&0xff));
-                
         return objSize;
     }
     
@@ -1491,42 +1459,9 @@ public class CardConnector {
         byte le= 0x10; // 16 bytes expected? 
 
         // send apdu
-        System.out.println("cardGetStatus");
-        System.out.println("APDU >>>: ");
-        byte[] response;
-        response = exchangeAPDU(cla, ins, p1, p2, data, le);
-        System.out.println("APDU <<<: "	+ toString(response));
-
-        // key info
-        int datasize= response.length;
-        short base=0; 
-        // process response (6 bytes - 2 long - 1 short)
-        if (datasize>0){// datasize ==15// 16?
-            byte CE_version_maj= response[base++];
-            byte CE_version_min= response[base++];
-            byte soft_version_maj= response[base++];
-            byte soft_version_min= response[base++];
-            int sec_mem_tot= ((response[base++]&0xff)<<8)+(response[base++]&0xff);
-            int mem_tot= ((response[base++]&0xff)<<8)+(response[base++]&0xff);
-            int sec_mem_free= ((response[base++]&0xff)<<8)+(response[base++]&0xff);
-            int mem_free= ((response[base++]&0xff)<<8)+(response[base++]&0xff);
-            byte PINs_nbr= response[base++];
-            byte keys_nbr= response[base++];
-            short logged_in= (short) (((response[base++]&0xff)<<8)+(response[base++]&0xff));
-            System.out.println("	datasize(15?) <<<: " + datasize );
-            System.out.println("	card Edge major version: "+CE_version_maj);
-            System.out.println("	card Edge minor version: "+CE_version_min);
-            System.out.println("	Applet major version: "+soft_version_maj);
-            System.out.println("	Applet minor version: "+soft_version_min);
-            System.out.println("	Total secure memory: "+ sec_mem_tot);
-            System.out.println("	Total object memory: "+ mem_tot);
-            System.out.println("	Free secure memory: "+ sec_mem_free);
-            System.out.println("	Free object memory: "+ mem_free);
-            System.out.println("	Number of used PIN: "+ PINs_nbr);
-            System.out.println("	Number of used keys: "+ keys_nbr);
-            System.out.println("	Currently logged in identities: "+ logged_in + " " + Integer.toBinaryString(logged_in));
-        }		
-        
+        logCommandAPDU("cardGetStatus",cla, ins, p1, p2, data, le);
+        byte[] response = exchangeAPDU(cla, ins, p1, p2, data, le);
+        logResponseAPDU(response);
         return response;
     }
     
